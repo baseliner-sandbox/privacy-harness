@@ -31,7 +31,9 @@ NAME = r"[A-Za-z0-9_.-]"
 
 def private_names():
     """The sandbox's private repo names, from the API."""
-    token = os.environ["SANDBOX_TOKEN"]
+    token = os.environ.get("SANDBOX_TOKEN", "")
+    if not token:
+        sys.exit("The SANDBOX_TOKEN secret is not set; see README.md")
     names, page = [], 1
     while True:
         req = urllib.request.Request(
