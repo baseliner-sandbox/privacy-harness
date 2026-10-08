@@ -1,0 +1,95 @@
+name: privacy
+
+# Runs baseliner against this org, which has private fixture repos, in each
+# privacy mode, then checks every public output of the run (the scan jobs'
+# logs, the artifacts, the findings issues on public repos) for a private
+# repo name or canary.
+#
+# It holds a token that can read private repos, so it never runs on code from
+# a pull request: only on dispatch, on a schedule and on pushes to main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: baseliner ref to build (branch, tag or SHA)
+        default: main
+  schedule:
+    - cron: "23 6 * * 1"
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: privacy
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: scan (${{ matrix.case }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # one at a time: the issues case writes, and API limits are shared
+      matrix:
+        case: [default, redact, exclude, issues, off]
+    steps:
+      - name: Require the sandbox token
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: |
+          if [ -z "$SANDBOX_TOKEN" ]; then
+            echo "::error::The SANDBOX_TOKEN secret is not set; see README.md"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: baselinerhq/baseliner
+          ref: ${{ inputs.ref || 'main' }}
+          path: baseliner
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: baseliner/go.mod
+          cache-dependency-path: baseliner/go.sum
+      - name: Build baseliner
+        run: go -C baseliner build -o "$RUNNER_TEMP/baseliner" ./cmd/baseliner
+      - name: Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: scripts/scan.sh "${{ matrix.case }}" "$RUNNER_TEMP/baseliner"
+      - name: Check the guard-off output can show a leak
+        if: matrix.case == 'off'
+        env:
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: python3 scripts/check.py present out/off
+      - name: Upload outputs
+        if: matrix.case != 'off' # guard-off output names private repos by design
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: out-${{ matrix.case }}
+          path: out/${{ matrix.case }}
+
+  check:
+    needs: scan
+    # Also after a failed scan: whatever it printed before failing is public.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # this run's job logs and artifacts
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check every public output for private repo names
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+        run: python3 scripts/check.py run
