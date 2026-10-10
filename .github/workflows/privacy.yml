@@ -18,6 +18,7 @@ on:
     - cron: "23 6 * * 1"
   push:
     branches: [main]
+    paths: [.github/workflows/privacy.yml, scripts/scan.sh, scripts/check.py]
 
 permissions: {}
 

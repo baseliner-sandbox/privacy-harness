@@ -1,0 +1,87 @@
+name: tokens
+
+# One-off token experiments, run by hand: what GitHub does with a findings
+# label for each kind of token (#133), and what baseliner reports with less
+# than the documented permissions (#139). Only public repos are touched, so
+# this public log names nothing private.
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  label-workflow-token:
+    name: "#133 label: workflow GITHUB_TOKEN"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/label_probe.sh "$GITHUB_REPOSITORY"
+
+  label-issues-only:
+    name: "#133 label: PAT with Issues and Metadata only"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ secrets.ISSUES_ONLY_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::ISSUES_ONLY_TOKEN is not set"; exit 1; }
+          scripts/label_probe.sh "$GITHUB_REPOSITORY"
+
+  permissions:
+    name: "#139 scan: ${{ matrix.token }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        token: [NO_ADMIN_TOKEN, ISSUES_ONLY_TOKEN]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: baselinerhq/baseliner
+          path: baseliner
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: baseliner/go.mod
+          cache-dependency-path: baseliner/go.sum
+      - run: go -C baseliner build -o "$RUNNER_TEMP/baseliner" ./cmd/baseliner
+      - name: Scan public repos with less than the documented permissions
+        env:
+          GITHUB_TOKEN: ${{ secrets[matrix.token] }}
+        run: |
+          [ -n "$GITHUB_TOKEN" ] || { echo "::error::${{ matrix.token }} is not set"; exit 1; }
+          cat > cfg.yaml <<'YAML'
+          scope:
+            github:
+              type: org
+              name: baseliner-sandbox
+            include: [test-pass, test-ruleset-precedence]
+          policy:
+            base: baseliner/examples/policies/forge-controls.yaml
+          privacy:
+            public_context: false
+          YAML
+          # Default checks, then the platform checks, each with every message.
+          for base in default baseliner/examples/policies/forge-controls.yaml; do
+            sed -i "s#^  base: .*#  base: $base#" cfg.yaml
+            "$RUNNER_TEMP/baseliner" scan --config cfg.yaml --format json --output-file out.json --verbose || true
+            jq -r '.repos[] | .slug as $s | .results[] | "\($s) \(.check_id) \(.status): \(.message // "")"' out.json
+          done
