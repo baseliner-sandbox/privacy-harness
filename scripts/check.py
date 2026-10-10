@@ -21,40 +21,65 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import time
 import urllib.request
 
 ORG = "baseliner-sandbox"
-FIXTURES = {"priv-fails", "priv-waiver", "priv-archived", "test-no"}
 MARKER = "CANARY-REASON"
 NAME = r"[A-Za-z0-9_.-]"
 
 
-def private_names():
-    """The sandbox's private repo names, from the API."""
+def api(path):
+    """GET a sandbox API path with SANDBOX_TOKEN; None on a 404."""
     token = os.environ.get("SANDBOX_TOKEN", "")
     if not token:
         sys.exit("The SANDBOX_TOKEN secret is not set; see README.md")
-    names, page = [], 1
-    while True:
-        req = urllib.request.Request(
-            f"https://api.github.com/orgs/{ORG}/repos?type=private&per_page=100&page={page}",
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-        )
+    req = urllib.request.Request(f"https://api.github.com/{path}",
+                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+    try:
         with urllib.request.urlopen(req) as resp:
-            batch = json.load(resp)
-        names += [r["name"] for r in batch if r.get("private")]
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def repos(kind):
+    out, page = [], 1
+    while True:
+        batch = api(f"orgs/{ORG}/repos?type={kind}&per_page=100&page={page}")
+        out += batch
         if len(batch) < 100:
-            return names
+            return out
         page += 1
+
+
+def private_names():
+    """The sandbox's private repo names, after checking that the fixtures the
+    cases rely on are there. No name is written in this public repo: the
+    fixtures are checked by what they are."""
+    private = [r for r in repos("private") if r.get("private")]
+    public = [r["name"] for r in repos("public")]
+    names = [r["name"] for r in private]
+    drift = []
+    if len(private) < 4:
+        drift.append("fewer than 4 private repos")
+    if not any(r.get("archived") for r in private):
+        drift.append("no archived private repo")
+    if not any(p.startswith(n + "-") for n in names for p in public):
+        drift.append("no private repo whose name prefixes a public one")
+    if not any(api(f"repos/{ORG}/{n}/contents/.baseliner.yml") for n in names):
+        drift.append("no private repo with a waiver file")
+    if drift:
+        # A fixture that disappeared would let the check pass on nothing.
+        sys.exit("fixture drift: " + "; ".join(drift))
+    return names
 
 
 def canaries():
     names = private_names()
-    missing = FIXTURES - set(names)
-    if missing:
-        # A fixture that disappeared would let the check pass on nothing.
-        sys.exit(f"fixture drift: {len(missing)} expected private fixture(s) missing")
     # Each name as a whole name, so a public repo it prefixes (test-no-readme)
     # is not a hit; the marker as a plain substring.
     pats = [re.compile(rf"(?<!{NAME}){re.escape(n)}(?!{NAME})", re.I) for n in names]

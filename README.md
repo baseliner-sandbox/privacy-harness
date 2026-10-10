@@ -16,7 +16,7 @@ manual run) and runs one case per matrix entry:
 | `default` | none: under GitHub Actions the guard is on | private repos masked |
 | `redact` | `public_context: true`, `private_repos: redact` | private repos masked |
 | `exclude` | `public_context: true`, `private_repos: exclude` | private repos absent, counted only |
-| `issues` | default, real `--open-issues`, private fixtures only | issues opened, nothing named in the log |
+| `issues` | default, real `--open-issues` on every repo | issues opened, nothing named in the log or in public repos' issues |
 | `off` | `public_context: false` | every private name present, in files only |
 
 The `off` case proves the check can see a leak. Its output names the private
@@ -34,7 +34,8 @@ not secrets: GitHub masks secret values in logs, which would hide a leak.
 
 ## Fixtures
 
-The private repos, which the check expects to exist:
+No fixture is named in this repo. The check finds the private repos through
+the API and checks that the ones the cases rely on exist:
 
 - one that fails most checks;
 - one whose `.baseliner.yml` waiver reason carries the canary marker;

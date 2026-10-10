@@ -5,7 +5,7 @@
 #   default  no privacy settings: under GitHub Actions the guard is on (redact)
 #   redact   public context, private repos masked
 #   exclude  public context, private repos left out
-#   issues   default settings, real --open-issues, scoped to the private fixtures
+#   issues   default settings, real --open-issues on every repo in the org
 #   off      guard off: proves the check can see a leak. Output goes to files
 #            only, never to this public log, and is checked in the job.
 # Outputs land in out/CASE. Exits non-zero only when baseliner errors (exit
@@ -24,9 +24,6 @@ cfg="$out/baseliner.yaml"
 	echo "    type: org"
 	echo "    name: baseliner-sandbox"
 	echo "    include_archived: true"
-	if [ "$case_" = issues ]; then
-		echo "  include: [priv-*, test-no]"
-	fi
 	echo "policy:"
 	echo "  base: default"
 	echo "  repo_waivers:"
