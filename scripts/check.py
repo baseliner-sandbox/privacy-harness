@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 ORG = "baseliner-sandbox"
@@ -73,8 +74,17 @@ def present(directory):
         sys.exit(f"canaries {absent} absent with the guard off: the check could not see a leak")
 
 
-def gh(*args):
-    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+def gh(*args, tries=1):
+    """Run gh and return its output. A job's log is uploaded shortly after the
+    job ends, so a log download is retried. A failure shows gh's error, which
+    names only this repo's API URL."""
+    for attempt in range(tries):
+        r = subprocess.run(["gh", *args], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout
+        if attempt + 1 < tries:
+            time.sleep(10 * (attempt + 1))
+    sys.exit(f"gh {args[0]} {args[1]} failed: {r.stderr.strip()[:300]}")
 
 
 def run():
@@ -88,7 +98,7 @@ def run():
     if not scans:
         sys.exit("no scan jobs found in this run")
     for j in scans:
-        log = gh("api", f"repos/{repo}/actions/jobs/{j['id']}/logs")
+        log = gh("api", f"repos/{repo}/actions/jobs/{j['id']}/logs", tries=6)
         for i in hits(log, pats):
             problems.append(f"LEAK in the log of job '{j['name']}': canary #{i}")
         case = j["name"].split("(")[-1].rstrip(")").strip()
