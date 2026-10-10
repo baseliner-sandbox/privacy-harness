@@ -209,7 +209,9 @@ def run():
 
     # 1. The scan jobs' logs: what a public reader of this run sees.
     jobs = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"))["jobs"]
-    scans = [j for j in jobs if j["name"].startswith("scan")]
+    # A skipped job (the GitLab cases before GITLAB_GROUP is set) ran nothing
+    # and has no log.
+    scans = [j for j in jobs if j["name"].startswith("scan") and j.get("conclusion") != "skipped"]
     if not scans:
         sys.exit("no scan jobs found in this run")
     for j in scans:
