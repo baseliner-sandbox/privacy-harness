@@ -46,6 +46,30 @@ the API and checks that the ones the cases rely on exist:
 On this free plan, private repos have no branch protection or rulesets, so
 the platform checks' unreadable paths run for real.
 
+## GitLab and Codeberg
+
+The `scan-gitlab` job runs the same cases (`gitlab-default`, `gitlab-redact`,
+`gitlab-exclude`, `gitlab-off`) against a gitlab.com group, once the
+repository variable `GITLAB_GROUP` names it. Its fixtures add a project nested
+in a private subgroup, since nested paths are where GitLab's names differ from
+GitHub's. Codeberg's fixtures are ready for when baseliner scans
+Gitea/Forgejo.
+
+The `fixtures` workflow creates a forge's fixtures once, with random names it
+never prints, and does nothing if they exist:
+
+```bash
+gh workflow run fixtures -R baseliner-sandbox/privacy-harness -f forge=gitlab
+```
+
+| Secret or variable | What |
+| --- | --- |
+| `GITLAB_TOKEN` (secret) | gitlab.com personal access token, scope `read_api`; the scans use it |
+| `GITLAB_SETUP_TOKEN` (secret) | scope `api`, short-lived; only the `fixtures` workflow uses it |
+| `GITLAB_GROUP` (variable) | the group's full path; enables the GitLab cases |
+| `CODEBERG_SETUP_TOKEN` (secret) | `write:organization`, `write:repository`; `fixtures` only |
+| `CODEBERG_ORG` (variable) | the Codeberg organisation, default `baseliner-sandbox` |
+
 ## Setup
 
 The workflow needs one secret, `SANDBOX_TOKEN`: a fine-grained personal

@@ -8,6 +8,9 @@
 #   issues   default settings, real --open-issues on every repo in the org
 #   off      guard off: proves the check can see a leak. Output goes to files
 #            only, never to this public log, and is checked in the job.
+# A case prefixed "gitlab-" (gitlab-default, gitlab-redact, gitlab-exclude,
+# gitlab-off) scans the GitLab group in GITLAB_GROUP instead, with
+# GITLAB_TOKEN; GitLab has no findings issues yet, so there is no issues case.
 # Outputs land in out/CASE. Exits non-zero only when baseliner errors (exit
 # 2 or more); failing checks (exit 1) are expected.
 set -euo pipefail
@@ -15,22 +18,34 @@ set -euo pipefail
 case_=${1:?case}
 bin=${2:?binary}
 out="out/$case_"
+forge=github
+mode=$case_
+if [ "${case_#gitlab-}" != "$case_" ]; then
+	forge=gitlab
+	mode=${case_#gitlab-}
+fi
 mkdir -p "$out"
 cfg="$out/baseliner.yaml"
 
 {
 	echo "scope:"
-	echo "  github:"
-	echo "    type: org"
-	echo "    name: baseliner-sandbox"
-	echo "    include_archived: true"
+	if [ "$forge" = gitlab ]; then
+		echo "  gitlab:"
+		echo "    group: ${GITLAB_GROUP:-baseliner-sandbox}"
+		echo "    include_archived: true"
+	else
+		echo "  github:"
+		echo "    type: org"
+		echo "    name: baseliner-sandbox"
+		echo "    include_archived: true"
+	fi
 	echo "policy:"
 	echo "  base: default"
 	echo "  repo_waivers:"
 	echo "    allow: [license_exists]"
-	case "$case_" in
+	case "$mode" in
 	default | issues) ;;
-	redact | exclude) printf 'privacy:\n  public_context: true\n  private_repos: %s\n' "$case_" ;;
+	redact | exclude) printf 'privacy:\n  public_context: true\n  private_repos: %s\n' "$mode" ;;
 	off) printf 'privacy:\n  public_context: false\n' ;;
 	*)
 		echo "unknown case: $case_" >&2
@@ -41,13 +56,18 @@ cfg="$out/baseliner.yaml"
 
 args=(scan --config "$cfg" --format both --verbose
 	--output-file "$out/results.json" --sarif-file "$out/results.sarif" --markdown-file "$out/report.md"
-	--fail-under 0.99 --min-coverage 1 --open-issues)
-if [ "$case_" != issues ]; then
-	args+=(--dry-run)
+	--fail-under 0.99 --min-coverage 1)
+# Findings issues are GitHub only: real ones in the issues case, a dry run in
+# the others, which still exercises the issue lookups.
+if [ "$forge" = github ]; then
+	args+=(--open-issues)
+	if [ "$mode" != issues ]; then
+		args+=(--dry-run)
+	fi
 fi
 
 set +e
-if [ "$case_" = off ]; then
+if [ "$mode" = off ]; then
 	"$bin" "${args[@]}" >"$out/stdout.txt" 2>"$out/stderr.txt"
 	code=$?
 else

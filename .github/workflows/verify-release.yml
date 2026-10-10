@@ -1,0 +1,50 @@
+name: verify-release
+
+# Verifies a baseliner release's build provenance as a user would (#138):
+# every archive and checksums.txt passes gh attestation verify, pinned to the
+# release workflow, and a tampered archive fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: baseliner release tag, e.g. v0.3.0
+        required: true
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download the release
+        run: |
+          mkdir dl && cd dl
+          gh release download "$TAG" -R baselinerhq/baseliner
+          ls -l
+      - name: Every file verifies
+        working-directory: dl
+        run: |
+          set -euo pipefail
+          for f in *.tar.gz *.zip checksums.txt; do
+            gh attestation verify "$f" --repo baselinerhq/baseliner \
+              --signer-workflow baselinerhq/baseliner/.github/workflows/release.yml >/dev/null
+            echo "verified: $f"
+          done
+          sha256sum --check --ignore-missing checksums.txt
+      - name: A tampered archive fails
+        working-directory: dl
+        run: |
+          f=$(ls *.tar.gz | head -1)
+          cp "$f" tampered.tar.gz && printf x >> tampered.tar.gz
+          if gh attestation verify tampered.tar.gz --repo baselinerhq/baseliner \
+            --signer-workflow baselinerhq/baseliner/.github/workflows/release.yml >/dev/null 2>&1; then
+            echo "::error::a tampered archive verified"
+            exit 1
+          fi
+          echo "tampered archive rejected"

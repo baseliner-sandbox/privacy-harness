@@ -1,0 +1,30 @@
+name: fixtures
+
+# Creates the private fixture repos on GitLab or Codeberg, once, with random
+# names that are never printed. Run by hand; does nothing if they exist.
+
+on:
+  workflow_dispatch:
+    inputs:
+      forge:
+        description: forge to create fixtures on
+        type: choice
+        options: [gitlab, codeberg]
+
+permissions: {}
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GITLAB_SETUP_TOKEN: ${{ secrets.GITLAB_SETUP_TOKEN }}
+          CODEBERG_SETUP_TOKEN: ${{ secrets.CODEBERG_SETUP_TOKEN }}
+          GITLAB_GROUP: ${{ vars.GITLAB_GROUP }}
+          CODEBERG_ORG: ${{ vars.CODEBERG_ORG }}
+        run: python3 scripts/fixtures.py "${{ inputs.forge }}"

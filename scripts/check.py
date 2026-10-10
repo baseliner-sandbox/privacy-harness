@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Check baseliner's output for private repo names.
 
-    check.py present DIR    assert the guard-off output in DIR names every
-                            private repo and the canary (proves the check
-                            can see a leak); prints counts only
+    check.py present DIR [gitlab]
+                            assert the guard-off output in DIR names every
+                            private repo of the forge (default github) and
+                            the canary (proves the check can see a leak);
+                            prints counts only
     check.py run            check this workflow run's scan job logs, its
                             artifacts and the sandbox's findings issues
 
@@ -22,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import time
 import urllib.request
 
@@ -78,8 +81,60 @@ def private_names():
     return names
 
 
-def canaries():
-    names = private_names()
+GITLAB = "https://gitlab.com/api/v4"
+
+
+def gitlab_api(path):
+    """GET a GitLab API path with GITLAB_TOKEN; None on a 404."""
+    req = urllib.request.Request(GITLAB + path, headers={"PRIVATE-TOKEN": os.environ["GITLAB_TOKEN"]})
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        sys.exit(f"GitLab API: HTTP {e.code}")
+
+
+def gitlab_names():
+    """The GitLab group's non-public project and subgroup paths, in every
+    spelling a log could use, after checking the fixtures are there."""
+    group = os.environ.get("GITLAB_GROUP") or "baseliner-sandbox"
+    g = gitlab_api("/groups/" + urllib.parse.quote(group, safe=""))
+    projects = gitlab_api(f"/groups/{g['id']}/projects?include_subgroups=true&per_page=100") or []
+    subgroups = gitlab_api(f"/groups/{g['id']}/descendant_groups?per_page=100") or []
+    hidden = [p for p in projects if p["visibility"] != "public"]
+    public = [p["path"] for p in projects if p["visibility"] == "public"]
+    drift = []
+    if len(hidden) < 5:
+        drift.append("fewer than 5 non-public GitLab projects")
+    if not any(p.get("archived") for p in hidden):
+        drift.append("no archived non-public GitLab project")
+    if not any(p["path_with_namespace"].count("/") >= 2 for p in hidden):
+        drift.append("no nested non-public GitLab project")
+    if not any(pub.startswith(p["path"] + "-") for p in hidden for pub in public):
+        drift.append("no non-public GitLab project whose path prefixes a public one")
+    if not any(p.get("default_branch") and gitlab_api(f"/projects/{p['id']}/repository/files/.baseliner.yml?ref={p['default_branch']}")
+               for p in hidden):
+        drift.append("no non-public GitLab project with a waiver file")
+    if drift:
+        sys.exit("GitLab fixture drift: " + "; ".join(drift))
+    names = []
+    for p in hidden:
+        full = p["path_with_namespace"]
+        names += [full, p["path"], urllib.parse.quote(full, safe="")]
+    names += [sg["full_path"] for sg in subgroups if sg["visibility"] != "public"]
+    return names
+
+
+def canaries(forge=None):
+    """The canaries for forge, or for every forge whose token is set."""
+    names = []
+    if forge in (None, "github"):
+        names += private_names()
+    # GitLab is in play once its group is configured, as in the workflow.
+    if forge == "gitlab" or (forge is None and os.environ.get("GITLAB_GROUP")):
+        names += gitlab_names()
     # Each name as a whole name, so a public repo it prefixes (test-no-readme)
     # is not a hit; the marker as a plain substring.
     pats = [re.compile(rf"(?<!{NAME}){re.escape(n)}(?!{NAME})", re.I) for n in names]
@@ -90,8 +145,8 @@ def hits(text, pats):
     return [i for i, p in enumerate(pats) if p.search(text)]
 
 
-def present(directory):
-    pats = canaries()
+def present(directory, forge):
+    pats = canaries(forge)
     text = "".join(p.read_text(errors="replace") for p in pathlib.Path(directory).rglob("*") if p.is_file())
     absent = [i for i, p in enumerate(pats) if not p.search(text)]
     print(f"guard off: {len(pats) - len(absent)} of {len(pats)} canaries present in the output")
@@ -154,9 +209,10 @@ def run():
         for i in hits(log, pats):
             problems.append(f"LEAK in the log of job '{j['name']}': canary #{i}")
         case = j["name"].split("(")[-1].rstrip(")").strip()
-        if case in ("default", "redact", "issues") and "private/redacted" not in log:
+        mode = case.removeprefix("gitlab-")
+        if mode in ("default", "redact", "issues") and "private/redacted" not in log:
             problems.append(f"job '{j['name']}' never masked a private repo: the case did not exercise the guard")
-        if case == "exclude":
+        if mode == "exclude":
             if "private/redacted" in log or "private/1" in log:
                 problems.append(f"job '{j['name']}' shows a masked private repo in exclude mode")
             if "private repo(s)" not in log:
@@ -191,8 +247,8 @@ def run():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "present":
-        present(sys.argv[2])
+    if len(sys.argv) in (3, 4) and sys.argv[1] == "present":
+        present(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else "github")
     elif len(sys.argv) == 2 and sys.argv[1] == "run":
         run()
     else:

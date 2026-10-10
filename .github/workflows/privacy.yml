@@ -79,8 +79,64 @@ jobs:
             out/${{ matrix.case }}
             !out/${{ matrix.case }}/baseliner.yaml
 
+  scan-gitlab:
+    name: scan (${{ matrix.case }})
+    # Runs once the GitLab group is configured (repository variable GITLAB_GROUP).
+    if: vars.GITLAB_GROUP != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1 # one at a time: the issues case writes, and API limits are shared
+      matrix:
+        case: [gitlab-default, gitlab-redact, gitlab-exclude, gitlab-off]
+    steps:
+      - name: Require the sandbox token
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "::error::The GITLAB_TOKEN secret is not set; see README.md"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: baselinerhq/baseliner
+          ref: ${{ inputs.ref || 'main' }}
+          path: baseliner
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: baseliner/go.mod
+          cache-dependency-path: baseliner/go.sum
+      - name: Build baseliner
+        run: go -C baseliner build -o "$RUNNER_TEMP/baseliner" ./cmd/baseliner
+      - name: Scan
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_GROUP: ${{ vars.GITLAB_GROUP }}
+        run: scripts/scan.sh "${{ matrix.case }}" "$RUNNER_TEMP/baseliner"
+      - name: Check the guard-off output can show a leak
+        if: matrix.case == 'gitlab-off'
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_GROUP: ${{ vars.GITLAB_GROUP }}
+        run: python3 scripts/check.py present out/gitlab-off gitlab
+      - name: Upload outputs
+        if: matrix.case != 'gitlab-off' # guard-off output names private repos by design
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: out-${{ matrix.case }}
+          path: |
+            out/${{ matrix.case }}
+            !out/${{ matrix.case }}/baseliner.yaml
+
   check:
-    needs: scan
+    needs: [scan, scan-gitlab]
     # Also after a failed scan: whatever it printed before failing is public.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
@@ -95,4 +151,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SANDBOX_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_GROUP: ${{ vars.GITLAB_GROUP }}
         run: python3 scripts/check.py run
