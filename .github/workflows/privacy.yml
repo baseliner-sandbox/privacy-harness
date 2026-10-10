@@ -135,8 +135,50 @@ jobs:
             out/${{ matrix.case }}
             !out/${{ matrix.case }}/baseliner.yaml
 
+  scan-forgejo:
+    name: scan (${{ matrix.case }})
+    # A throwaway Forgejo in the job: no account or secret needed.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [forgejo-default, forgejo-redact, forgejo-exclude, forgejo-off]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: baselinerhq/baseliner
+          ref: ${{ inputs.ref || 'main' }}
+          path: baseliner
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: baseliner/go.mod
+          cache-dependency-path: baseliner/go.sum
+      - name: Build baseliner
+        run: go -C baseliner build -o "$RUNNER_TEMP/baseliner" ./cmd/baseliner
+      - name: Start Forgejo and create its fixtures
+        run: scripts/forgejo_fixtures.sh
+      - name: Scan
+        run: scripts/scan.sh "${{ matrix.case }}" "$RUNNER_TEMP/baseliner"
+      - name: Check the guard-off output can show a leak
+        if: matrix.case == 'forgejo-off'
+        run: python3 scripts/check.py present out/forgejo-off forgejo
+      - name: Upload outputs
+        if: matrix.case != 'forgejo-off' # guard-off output names private repos by design
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: out-${{ matrix.case }}
+          path: |
+            out/${{ matrix.case }}
+            !out/${{ matrix.case }}/*/baseliner.yaml
+
   check:
-    needs: [scan, scan-gitlab]
+    needs: [scan, scan-gitlab, scan-forgejo]
     # Also after a failed scan: whatever it printed before failing is public.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest

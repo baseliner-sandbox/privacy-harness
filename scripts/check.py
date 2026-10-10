@@ -3,7 +3,8 @@
 
     check.py present DIR [gitlab]
                             assert the guard-off output in DIR names every
-                            private repo of the forge (default github) and
+                            private repo of the forge (github, gitlab or
+                            forgejo; default github) and
                             the canary (proves the check can see a leak);
                             prints counts only
     check.py run            check this workflow run's scan job logs, its
@@ -83,6 +84,11 @@ def private_names():
 
 GITLAB = "https://gitlab.com/api/v4"
 
+# The throwaway Forgejo's non-public repos (scripts/forgejo_fixtures.sh). The
+# instance lives only for one job, so the names are not secret: the check is
+# that no public output names them.
+FORGEJO_PRIVATE = ["fx-hidden-alpha", "fx-hidden-archive", "fx-hidden-limited"]
+
 
 def gitlab_api(path):
     """GET a GitLab API path with GITLAB_TOKEN; None on a 404."""
@@ -128,8 +134,10 @@ def gitlab_names():
 
 
 def canaries(forge=None):
-    """The canaries for forge, or for every forge whose token is set."""
+    """The canaries for forge, or for every forge in play."""
     names = []
+    if forge in (None, "forgejo"):
+        names += FORGEJO_PRIVATE
     if forge in (None, "github"):
         names += private_names()
     # GitLab is in play once its group is configured, as in the workflow.
@@ -209,7 +217,7 @@ def run():
         for i in hits(log, pats):
             problems.append(f"LEAK in the log of job '{j['name']}': canary #{i}")
         case = j["name"].split("(")[-1].rstrip(")").strip()
-        mode = case.removeprefix("gitlab-")
+        mode = case.removeprefix("gitlab-").removeprefix("forgejo-")
         if mode in ("default", "redact", "issues") and "private/redacted" not in log:
             problems.append(f"job '{j['name']}' never masked a private repo: the case did not exercise the guard")
         if mode == "exclude":

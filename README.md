@@ -46,6 +46,21 @@ the API and checks that the ones the cases rely on exist:
 On this free plan, private repos have no branch protection or rulesets, so
 the platform checks' unreadable paths run for real.
 
+## Forgejo (in the job)
+
+The `scan-forgejo` job runs the cases `forgejo-default`, `forgejo-redact`,
+`forgejo-exclude` and `forgejo-off` against a throwaway Forgejo it starts
+itself, so it needs no account or secret. Its fixtures cover:
+
+- a private repo with a waiver;
+- an archived private repo;
+- a repo that is public by its own setting but belongs to a `limited`
+  organisation.
+
+The fixture names are fixed and published in `scripts/forgejo_fixtures.sh`,
+since the instance lives only for one job. The check is that no public
+output of the run names them.
+
 ## GitLab and Codeberg
 
 The `scan-gitlab` job runs the same cases (`gitlab-default`, `gitlab-redact`,
