@@ -112,6 +112,33 @@ def gh(*args, tries=1):
     sys.exit(f"gh {args[0]} {args[1]} failed: {r.stderr.strip()[:300]}")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def job_log(repo, job_id, tries=6):
+    """A job's log. GitHub answers with a redirect to a signed storage URL,
+    which is followed without the token, so it goes nowhere but the API. The
+    log is uploaded shortly after the job ends, so a miss is retried."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    for attempt in range(tries):
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/actions/jobs/{job_id}/logs",
+            headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"},
+        )
+        try:
+            opener.open(req)
+            sys.exit(f"job {job_id}: expected a redirect to the log")
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307) and e.headers.get("Location"):
+                with urllib.request.urlopen(e.headers["Location"]) as resp:
+                    return resp.read().decode("utf-8", errors="replace")
+            if attempt + 1 == tries:
+                sys.exit(f"job {job_id}: log not available (HTTP {e.code})")
+        time.sleep(10 * (attempt + 1))
+
+
 def run():
     pats = canaries()
     repo, run_id = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"]
@@ -123,7 +150,7 @@ def run():
     if not scans:
         sys.exit("no scan jobs found in this run")
     for j in scans:
-        log = gh("api", f"repos/{repo}/actions/jobs/{j['id']}/logs", tries=6)
+        log = job_log(repo, j["id"])
         for i in hits(log, pats):
             problems.append(f"LEAK in the log of job '{j['name']}': canary #{i}")
         case = j["name"].split("(")[-1].rstrip(")").strip()
